@@ -4,6 +4,7 @@
 
 import serial
 from datetime import datetime, timedelta
+from datetime import timezone
 import time
 import csv
 import os
@@ -16,10 +17,14 @@ from serial import serialutil
 import pandas as pd
 import asyncio
 import math
-import websocket
+import socketio
+import json
+from flask import Flask
+from flask_socketio import SocketIO
 
 
-WEBSOCKET_URL = "ws://localhost:3000"
+
+
 set_point =0
 read_count =0
 tuning_constant = 2.28 * (10 ** -7) 
@@ -576,9 +581,51 @@ def apply_Freq_correction(apply_Rb_Hz, Freq_steer ):
         
 
     # signal.clear()
+    
+    
+# Create Flask app and SocketIO instance
+app = Flask(__name__)
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# Function to emit TIC data to UI via WebSocket in JSON format
+def send_tic_data(data):
+    # Generate a timestamp in UTC
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    # Create the data in the desired format
+    formatted_data = {
+        'timestamp': timestamp,
+        'value': data
+    }
+
+    # Emit the data as JSON
+    socketio.emit('message', formatted_data)
+
+    # Log the formatted data
+    print(f"TIC Data: {formatted_data}")
 
 
 
+# Flask route for testing
+@app.route('/')
+def home():
+    return "Socket.IO server is running!"
+
+# Flask WebSocket events
+@socketio.on('connect')
+def handle_connect():
+    print("Client connected")
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print("Client disconnected")
+
+# Function to start the Flask app in a background thread
+def start_flask_app():
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False)
+
+    
+    
 def steering_Rb():
     
     TIC_count1 =0 
@@ -624,6 +671,8 @@ def steering_Rb():
                 
                 if data.__contains__("TI(A->B)"):
                     data1 = data.split(" ")
+                    tic_reading = float(data1[0])
+                    send_tic_data(tic_reading)  # Send TIC data via WebSocket
                     if float(data1[0])<1:
                         
                         nowt = datetime.now()
@@ -738,4 +787,10 @@ def steering_Rb():
 
 
 if __name__ == "__main__":
+    # Start Flask app in a separate thread
+    flask_thread = threading.Thread(target=start_flask_app)
+    flask_thread.daemon = True
+    flask_thread.start()
+
+    # Start TIC processing
     steering_Rb()
