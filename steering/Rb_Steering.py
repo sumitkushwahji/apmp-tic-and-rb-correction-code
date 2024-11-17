@@ -620,11 +620,35 @@ def handle_connect():
 def handle_disconnect():
     print("Client disconnected")
 
+@socketio.on('applyPhaseCorrection')
+def handle_phase_correction(data):
+    try:
+        # Extract the correction value and flag from the incoming WebSocket data
+        corr_value = data.get('corrValue')
+        flag = data.get('flag')
+        print("data from frontend",data)                             
+        
+        if corr_value is None or flag is None:
+            raise ValueError("Invalid data: 'corrValue' and 'flag' must be provided.")
+
+        # Call the apply_Phase_correction function with the extracted data
+        apply_Phase_correction(corr_value, flag)
+
+        # Send a success response back to the client
+        socketio.emit('phaseCorrectionStatus', {'status': 'success', 'value': corr_value})
+
+    except Exception as e:
+        # Handle any errors and send an error response
+        socketio.emit('phaseCorrectionStatus', {'status': 'error', 'message': str(e)})
+
+
+
 # Function to start the Flask app in a background thread
 def start_flask_app():
     socketio.run(app, host='0.0.0.0', port=5000, debug=False)
 
-    
+
+
     
 def steering_Rb():
     
