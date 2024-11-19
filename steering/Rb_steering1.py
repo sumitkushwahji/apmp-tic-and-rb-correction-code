@@ -519,13 +519,91 @@ def handle_phase_correction(data):
         socketio.emit("phaseCorrectionStatus", {"status": "error", "message": str(e)})
 
 
+# Shared state for parameters
+shared_state = {
+    "steering_int": 30,  # Steering interval in seconds
+    "slope_multipler": 1.5,
+    "phase_time_const": 20,
+    "stop_correction": False,
+}
+
+
+shared_state = {
+    "steering_int": 30,  # Steering interval in seconds
+    "slope_multipler": 1.5,
+    "phase_time_const": 20,
+    "error_limit": 0.5,  # Default error limit for auto-steering
+    "stop_correction": False,
+    "stop_auto_steering": False,
+}
+
+# Lock for thread safety
+state_lock = threading.Lock()
+
+
+# WebSocket event to update parameters
+@socketio.on("updateParameters")
+def update_parameters(data):
+    try:
+        with state_lock:
+            # Update shared state with received parameters
+            if "steering_int" in data:
+                shared_state["steering_int"] = int(data["steering_int"])
+            if "slope_multipler" in data:
+                shared_state["slope_multipler"] = float(data["slope_multipler"])
+            if "phase_time_const" in data:
+                shared_state["phase_time_const"] = int(data["phase_time_const"])
+            if "error_limit" in data:
+                shared_state["error_limit"] = float(data["error_limit"])
+
+        print(f"Updated parameters: {shared_state}")
+        socketio.emit(
+            "parameterUpdateStatus", {"status": "success", "params": shared_state}
+        )
+    except Exception as e:
+        socketio.emit("parameterUpdateStatus", {"status": "error", "message": str(e)})
+
+
+# WebSocket event to stop steering correction
+@socketio.on("stopCorrection")
+def stop_correction():
+    with state_lock:
+        shared_state["stop_correction"] = True
+    print("Steering correction stopped")
+    socketio.emit("correctionStatus", {"status": "stopped"})
+
+
+# WebSocket event to stop auto-steering
+@socketio.on("stopAutoSteering")
+def stop_auto_steering():
+    with state_lock:
+        shared_state["stop_auto_steering"] = True
+    print("Auto-steering correction stopped")
+    socketio.emit("correctionStatus", {"status": "stopped"})
+
+
+# Function to emit mock frequency and phase correction data
+# def emit_real_time_data():
+#     while True:
+#         with state_lock:
+#             # Emit data only if correction is active
+#             if not shared_state["stop_correction"]:
+#                 freq_corr = random.uniform(-0.1, 0.1)  # Mock frequency correction
+#                 socketio.emit("freq_corr", {"value": freq_corr})
+
+#             if not shared_state["stop_auto_steering"]:
+#                 phase_corr = random.uniform(-0.05, 0.05)  # Mock phase correction
+#                 socketio.emit("phase_corr", {"value": phase_corr})
+
+# time.sleep(1)  # Emit data every 1 second
+
+
 # Function to start the Flask app in a background thread
 def start_flask_app():
     socketio.run(app, host="0.0.0.0", port=5000, debug=False)
 
 
 def steering_Rb():
-
     TIC_count1 = 0
     TIC_count2 = 0
     first_phase_corr1 = True
@@ -533,10 +611,9 @@ def steering_Rb():
     TIC_slope = []
     data_to_save = []
     slope_counter = 0
+    slope = 0
     steering = False  # Auto loop the steering
-    steering_int = 30  # Steering interval is every 60 seconds
-    slope_multipler = 1.5
-    phase_time_const = 20
+
     TIC_for_slope = []
     activate_steering = True
     steer_count = 0
@@ -591,7 +668,7 @@ def steering_Rb():
                             latest_readings.pop(0)
 
                         avg_reading = 0
-                        # Calculate and print the avervaluesprocess_CVage of the latest 3 readings
+                        # Calculate and print the average of the latest 3 readings
                         if latest_readings:
                             avg_reading = sum(latest_readings) / len(latest_readings)
                             # read_count =read_count + 1
@@ -611,10 +688,10 @@ def steering_Rb():
                                 TIC_count1 = TIC_count1 + 1
                                 # print(f"First Phase correction flag: f{first_phase_corr1}")
                                 # Apply phase adjustment/ Offset adjustment
-                                # Initiate a parallel operaiton for Rb communication
+                                # Initiate a parallel operation for Rb communication
                                 if (
                                     first_phase_corr1
-                                ):  # First time pahse adjustment correction.
+                                ):  # First time phase adjustment correction.
                                     first_phase_corr1 = False
                                     # signal.set()
                                     apply_Phase_correction(
@@ -635,92 +712,155 @@ def steering_Rb():
                                     )  # Inputs for this function are TIC reading in ns, binary 0 or 1: 0 indicates Phase adjustment 1 indicates Frequency adjustment
                                     time.sleep(3)
 
-                            elif (
-                                abs(avg_reading) < 100e-9 and abs(avg_reading) > 1e-9
-                            ):  # start auto steering when error is between 100 ns and 1 ns
-
-                                steer_count = steer_count + 1
-                                print(
-                                    f"STEERING ACTIVATED, Steer count : {steer_count}"
-                                )
-                                TIC_for_slope.append(float(data1[0]))
-                                if (
-                                    len(TIC_for_slope) > steering_int
-                                ):  # Every latest 60 s
-                                    TIC_for_slope.pop(0)
-
-                                # if abs(avg_reading) > 1E-9:
-                                # activate_steering = True
-
-                                # if ((count % steering_int ==0) & (len(freq_4_slope)  == steering_int)) :
-                                if steer_count % steering_int == 0:  # and gui_signal:
-                                    data_pointF = list(range(1, len(TIC_for_slope) + 1))
-                                    slope, intercept = np.polyfit(
-                                        data_pointF, TIC_for_slope, 1
-                                    )  # y = mx + c ; ouput p = [m,c]
-                                    print(f"Slope of the TIC_data (Frequency): {slope}")
-
-                                    Freq_corr = (
-                                        slope_multipler * slope * 1e7
-                                    )  # slope multipler 1.5
-                                    phase_corr = ((0 - float(data1[0])) * 1e7) / (
-                                        phase_time_const  # phase time constant in seconds
+                                # elif (
+                                #     abs(avg_reading) < 100e-9 and abs(avg_reading) > 1e-9
+                                # ):  # start auto steering when error is between 100 ns and 1 ns
+                                interval = shared_state["steering_int"]
+                                shared_state["slope_multipler"]
+                                shared_state["phase_time_const"]
+                                while not shared_state["stop_correction"]:
+                                    time.sleep(
+                                        1
+                                    )  # Simulate some interval for processing
+                                    print(
+                                        f"STEERING ACTIVATED, Steer count : {steer_count}"
                                     )
 
-                                    print(f"Frequency Correction: {Freq_corr}")
-                                    print(f"Phase Correction: {phase_corr}")
+                                    steer_count += 1
 
-                                    Total_corr = -(Freq_corr - phase_corr)
+                                    TIC_for_slope.append(float(data1[0]))
 
-                                    print(f"Total Correction applied: {Total_corr}")
-                                    activate_steering = (
-                                        True  # Keep the loop active for steering
-                                    )
+                                    if (
+                                        len(TIC_for_slope)
+                                        > shared_state["steering_int"]
+                                    ):
+                                        TIC_for_slope.pop(0)
 
-                                    apply_Freq_correction(
-                                        Total_corr, True
-                                    )  # Inputs is value of Rb currection in Hz and the flag to indicate the more of correction
-
-                                    timestamp = datetime.now()
-
-                                    # Append the data along with calculated values to the list
-                                    data_to_save.append(
-                                        {
-                                            "Timestamp": timestamp,
-                                            "TIC reading": float(data1[0]),
-                                            "Slope": slope,
-                                            "Frequency Correction": Freq_corr,
-                                            "Phase Correction": phase_corr,
-                                            "Total Correction": Total_corr,
-                                            "Phase Time Constant": phase_time_const,
-                                            "Steering Interval": steering_int,  # Replace with actual column name
-                                        }
-                                    )
-
-                                    # output_csv_path = 'F:\\qUARTZLOCK\\PYTHON\\Qz_Ster_overview.csv'  # Replace with your desired output CSV path
-                                    # output_csv_path = r'F:\qUARTZLOCK\PYTHON\Qz_Ster_overview.csv'
-
-                                    with open(
-                                        "Quarz_Ster_overview.csv", "w", newline=""
-                                    ) as csv_output:
-                                        fieldnames = [
-                                            "Timestamp",
-                                            "TIC reading",
-                                            "Slope",
-                                            "Frequency Correction",
-                                            "Phase Correction",
-                                            "Total Correction",
-                                            "Phase Time Constant",
-                                            "Steering Interval",
-                                        ]
-                                        csv_writer = csv.DictWriter(
-                                            csv_output, fieldnames=fieldnames
+                                    if steer_count % shared_state["steering_int"] == 0:
+                                        data_pointF = list(
+                                            range(1, len(TIC_for_slope) + 1)
+                                        )
+                                        slope, intercept = np.polyfit(
+                                            data_pointF, TIC_for_slope, 1
                                         )
 
-                                        csv_writer.writeheader()
-                                        csv_writer.writerows(data_to_save)
+                                        freq_corr = (
+                                            shared_state["slope_multipler"]
+                                            * slope
+                                            * 1e7
+                                        )
+                                        phase_corr = (
+                                            (0 - TIC_for_slope[-1]) * 1e7
+                                        ) / shared_state["phase_time_const"]
+                                        total_corr = -(freq_corr - phase_corr)
 
-                                    # apply_steering(CV_session, Present_error, Prev_error, time_bw_errors, correction_delay)
+                                        print(
+                                            f"Freq_corr: {freq_corr}, Phase_corr: {phase_corr}, Total_corr: {total_corr}"
+                                        )
+
+                                        socketio.emit(
+                                            "freq_corr",
+                                            {
+                                                "value": freq_corr,
+                                                "timestamp": datetime.now(
+                                                    timezone.utc
+                                                ).isoformat(),
+                                            },
+                                        )
+                                        socketio.emit(
+                                            "phase_corr",
+                                            {
+                                                "value": phase_corr,
+                                                "timestamp": datetime.now(
+                                                    timezone.utc
+                                                ).isoformat(),
+                                            },
+                                        )
+                                        socketio.emit(
+                                            "currentTic",
+                                            {
+                                                "value": latest_readings,
+                                                "timestamp": datetime.now(
+                                                    timezone.utc
+                                                ).isoformat(),
+                                            },
+                                        )
+                                        socketio.emit(
+                                            "slop_Interval",
+                                            {
+                                                "value": interval,
+                                                "timestamp": datetime.now(
+                                                    timezone.utc
+                                                ).isoformat(),
+                                            },
+                                        )
+
+                                        # Send real-time data to the UI
+                                        socketio.emit(
+                                            "realTimeData",
+                                            {
+                                                "Freq_corr": freq_corr,
+                                                "Phase_corr": phase_corr,
+                                                "Total_corr": total_corr,
+                                                "timestamp": datetime.now(
+                                                    timezone.utc
+                                                ).isoformat(),
+                                            },
+                                        )
+                                        # Emit separate events for each correction
+
+                                        print("Steering loop stopped.")
+
+                                        # print(f"Total Correction applied: {total_corr}")
+
+                                        apply_Freq_correction(
+                                            total_corr, True
+                                        )  # Inputs is value of Rb correction in Hz and the flag to indicate the mode of correction
+
+                                        timestamp = datetime.now()
+
+                                        # Append the data along with calculated values to the list
+                                        data_to_save.append(
+                                            {
+                                                "Timestamp": timestamp,
+                                                "TIC reading": float(data1[0]),
+                                                "Slope": slope,
+                                                "Frequency Correction": freq_corr,
+                                                "Phase Correction": phase_corr,
+                                                "Total Correction": total_corr,
+                                                "Phase Time Constant": shared_state[
+                                                    "phase_time_const"
+                                                ],
+                                                "Steering Interval": shared_state[
+                                                    "steering_int"
+                                                ],  # Replace with actual column name
+                                            }
+                                        )
+
+                                        # output_csv_path = 'F:\\qUARTZLOCK\\PYTHON\\Qz_Ster_overview.csv'  # Replace with your desired output CSV path
+                                        # output_csv_path = r'F:\qUARTZLOCK\PYTHON\Qz_Ster_overview.csv'
+
+                                        with open(
+                                            "Quarz_Ster_overview.csv", "w", newline=""
+                                        ) as csv_output:
+                                            fieldnames = [
+                                                "Timestamp",
+                                                "TIC reading",
+                                                "Slope",
+                                                "Frequency Correction",
+                                                "Phase Correction",
+                                                "Total Correction",
+                                                "Phase Time Constant",
+                                                "Steering Interval",
+                                            ]
+                                            csv_writer = csv.DictWriter(
+                                                csv_output, fieldnames=fieldnames
+                                            )
+
+                                            csv_writer.writeheader()
+                                            csv_writer.writerows(data_to_save)
+
+                                        # apply_steering(CV_session, Present_error, Prev_error, time_bw_errors, correction_delay)
 
 
 if __name__ == "__main__":
